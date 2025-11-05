@@ -19,6 +19,7 @@
 
 package com.sk89q.worldedit.bukkit;
 
+import com.fastasyncworldedit.core.util.FoliaUtil;
 import com.fastasyncworldedit.core.util.TaskManager;
 import com.sk89q.worldedit.bukkit.adapter.BukkitImplAdapter;
 import com.sk89q.worldedit.entity.BaseEntity;
@@ -28,6 +29,7 @@ import com.sk89q.worldedit.entity.metadata.EntityProperties;
 import com.sk89q.worldedit.extent.Extent;
 import com.sk89q.worldedit.util.Location;
 import com.sk89q.worldedit.world.NullWorld;
+import io.papermc.lib.PaperLib;
 import org.bukkit.entity.EntityType;
 
 import javax.annotation.Nullable;
@@ -84,6 +86,9 @@ public class BukkitEntity implements Entity {
     public boolean setLocation(Location location) {
         org.bukkit.entity.Entity entity = entityRef.get();
         if (entity != null) {
+            if (PaperLib.isPaper()) {
+                return entity.teleportAsync(BukkitAdapter.adapt(location)).join();
+            }
             return entity.teleport(BukkitAdapter.adapt(location));
         } else {
             return false;
@@ -111,6 +116,21 @@ public class BukkitEntity implements Entity {
 
     @Override
     public boolean remove() {
+        if (FoliaUtil.isFoliaServer()) {
+            return TaskManager.taskManager().syncWhenFree(() -> {
+                org.bukkit.entity.Entity entity = entityRef.get();
+                if (entity != null) {
+                    try {
+                        entity.getScheduler().execute(WorldEditPlugin.getInstance(), entity::remove, null, 1);
+                        return true;
+                    } catch (UnsupportedOperationException e) {
+                        return false;
+                    }
+                } else {
+                    return true;
+                }
+            });
+        }
         // synchronize the whole method, not just the remove operation as we always need to synchronize and
         // can make sure the entity reference was not invalidated in the few milliseconds between the next available tick (lol)
         return TaskManager.taskManager().sync(() -> {

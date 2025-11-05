@@ -11,6 +11,7 @@ import com.fastasyncworldedit.core.math.BitArrayUnstretched;
 import com.fastasyncworldedit.core.math.IntPair;
 import com.fastasyncworldedit.core.nbt.FaweCompoundTag;
 import com.fastasyncworldedit.core.queue.IChunkSet;
+import com.fastasyncworldedit.core.util.FoliaUtil;
 import com.fastasyncworldedit.core.util.MathMan;
 import com.fastasyncworldedit.core.util.NbtUtils;
 import com.fastasyncworldedit.core.util.collection.AdaptedMap;
@@ -23,6 +24,7 @@ import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.util.SideEffect;
 import com.sk89q.worldedit.util.formatting.text.TextComponent;
 import com.sk89q.worldedit.world.biome.BiomeType;
+import com.sk89q.worldedit.world.biome.BiomeTypes;
 import com.sk89q.worldedit.world.block.BlockTypesCache;
 import io.papermc.lib.PaperLib;
 import io.papermc.paper.event.block.BeaconDeactivatedEvent;
@@ -58,6 +60,8 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
 import net.minecraft.world.level.storage.TagValueOutput;
 import net.minecraft.world.level.storage.ValueInput;
 import org.apache.logging.log4j.Logger;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.World;
 import org.bukkit.craftbukkit.CraftWorld;
 import org.bukkit.craftbukkit.block.CraftBlock;
@@ -367,7 +371,21 @@ public class PaperweightGetBlocks extends AbstractBukkitGetBlocks<ServerLevel, L
                             beacons = new ArrayList<>();
                         }
                         beacons.add(tile);
-                        PaperweightPlatformAdapter.removeBeacon(tile, nmsChunk);
+                        if (FoliaUtil.isFoliaServer()) {
+                            Location location = new Location(
+                                    nmsWorld.getWorld(),
+                                    tile.getBlockPos().getX(),
+                                    tile.getBlockPos().getY(),
+                                    tile.getBlockPos().getZ()
+                            );
+                            Bukkit.getServer().getRegionScheduler().execute(
+                                    WorldEditPlugin.getInstance(),
+                                    location,
+                                    () -> PaperweightPlatformAdapter.removeBeacon(tile, nmsChunk)
+                            );
+                        } else {
+                            PaperweightPlatformAdapter.removeBeacon(tile, nmsChunk);
+                        }
                         continue;
                     }
                     nmsChunk.removeBlockEntity(tile.getBlockPos());
@@ -672,17 +690,35 @@ public class PaperweightGetBlocks extends AbstractBukkitGetBlocks<ServerLevel, L
                                 entity.load(input);
                                 entity.absSnapTo(x, y, z, yaw, pitch);
                                 entity.setUUID(NbtUtils.uuid(nativeTag));
-                                if (!nmsWorld.addFreshEntity(entity, CreatureSpawnEvent.SpawnReason.CUSTOM)) {
-                                    LOGGER.warn(
-                                            "Error creating entity of type `{}` in world `{}` at location `{},{},{}`",
-                                            id,
-                                            nmsWorld.getWorld().getName(),
-                                            x,
-                                            y,
-                                            z
-                                    );
-                                    // Unsuccessful create should not be saved to history
-                                    iterator.remove();
+                                if (FoliaUtil.isFoliaServer()) {
+                                    Location location = new Location(nmsWorld.getWorld(), x, y, z);
+                                    Bukkit.getServer().getRegionScheduler().execute(WorldEditPlugin.getInstance(), location, () -> {
+                                        if (!nmsWorld.addFreshEntity(entity, CreatureSpawnEvent.SpawnReason.CUSTOM)) {
+                                            LOGGER.warn(
+                                                    "Error creating entity of type `{}` in world `{}` at location `{},{},{}`",
+                                                    id,
+                                                    nmsWorld.getWorld().getName(),
+                                                    x,
+                                                    y,
+                                                    z
+                                            );
+                                            // Unsuccessful create should not be saved to history
+                                            iterator.remove();
+                                        }
+                                    });
+                                } else {
+                                    if (!nmsWorld.addFreshEntity(entity, CreatureSpawnEvent.SpawnReason.CUSTOM)) {
+                                        LOGGER.warn(
+                                                "Error creating entity of type `{}` in world `{}` at location `{},{},{}`",
+                                                id,
+                                                nmsWorld.getWorld().getName(),
+                                                x,
+                                                y,
+                                                z
+                                        );
+                                        // Unsuccessful create should not be saved to history
+                                        iterator.remove();
+                                    }
                                 }
                             }
                         }
@@ -703,20 +739,42 @@ public class PaperweightGetBlocks extends AbstractBukkitGetBlocks<ServerLevel, L
                         final int z = blockHash.z() + bz;
                         final BlockPos pos = new BlockPos(x, y, z);
 
-                        synchronized (nmsWorld) {
-                            BlockEntity tileEntity = nmsWorld.getBlockEntity(pos);
-                            if (tileEntity == null || tileEntity.isRemoved()) {
-                                nmsWorld.removeBlockEntity(pos);
-                                tileEntity = nmsWorld.getBlockEntity(pos);
-                            }
-                            if (tileEntity != null) {
-                                final CompoundTag tag = (CompoundTag) adapter.fromNativeLin(nativeTag.linTag());
-                                tag.put("x", IntTag.valueOf(x));
-                                tag.put("y", IntTag.valueOf(y));
-                                tag.put("z", IntTag.valueOf(z));
-                                // TODO (VI/O)
-                                ValueInput input = createInput(tag);
-                                tileEntity.loadWithComponents(input);
+                        if (FoliaUtil.isFoliaServer()) {
+                            Location location = new Location(nmsWorld.getWorld(), x, y, z);
+                            Bukkit.getServer().getRegionScheduler().execute(WorldEditPlugin.getInstance(), location, () -> {
+                                synchronized (nmsWorld) {
+                                    BlockEntity tileEntity = nmsWorld.getBlockEntity(pos);
+                                    if (tileEntity == null || tileEntity.isRemoved()) {
+                                        nmsWorld.removeBlockEntity(pos);
+                                        tileEntity = nmsWorld.getBlockEntity(pos);
+                                    }
+                                    if (tileEntity != null) {
+                                        final CompoundTag tag = (CompoundTag) adapter.fromNativeLin(nativeTag.linTag());
+                                        tag.put("x", IntTag.valueOf(x));
+                                        tag.put("y", IntTag.valueOf(y));
+                                        tag.put("z", IntTag.valueOf(z));
+                                        // TODO (VI/O)
+                                        ValueInput input = createInput(tag);
+                                        tileEntity.loadWithComponents(input);
+                                    }
+                                }
+                            });
+                        } else {
+                            synchronized (nmsWorld) {
+                                BlockEntity tileEntity = nmsWorld.getBlockEntity(pos);
+                                if (tileEntity == null || tileEntity.isRemoved()) {
+                                    nmsWorld.removeBlockEntity(pos);
+                                    tileEntity = nmsWorld.getBlockEntity(pos);
+                                }
+                                if (tileEntity != null) {
+                                    final CompoundTag tag = (CompoundTag) adapter.fromNativeLin(nativeTag.linTag());
+                                    tag.put("x", IntTag.valueOf(x));
+                                    tag.put("y", IntTag.valueOf(y));
+                                    tag.put("z", IntTag.valueOf(z));
+                                    // TODO (VI/O)
+                                    ValueInput input = createInput(tag);
+                                    tileEntity.loadWithComponents(input);
+                                }
                             }
                         }
                     }
