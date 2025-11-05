@@ -30,10 +30,12 @@ import com.sk89q.worldedit.extent.Extent;
 import com.sk89q.worldedit.util.Location;
 import com.sk89q.worldedit.world.NullWorld;
 import io.papermc.lib.PaperLib;
+import org.bukkit.Bukkit;
 import org.bukkit.entity.EntityType;
 
 import javax.annotation.Nullable;
 import java.lang.ref.WeakReference;
+import java.util.concurrent.CompletableFuture;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -105,6 +107,16 @@ public class BukkitEntity implements Entity {
 
             BukkitImplAdapter adapter = WorldEditPlugin.getInstance().getBukkitImplAdapter();
             if (adapter != null) {
+                if (FoliaUtil.isFoliaServer()) {
+                    org.bukkit.Location location = entity.getLocation();
+                    CompletableFuture<BaseEntity> future = new CompletableFuture<>();
+                    Bukkit.getServer().getRegionScheduler().run(
+                            WorldEditPlugin.getInstance(),
+                            location,
+                            scheduledTask -> future.complete(adapter.getEntity(entity))
+                    );
+                    return future.join();
+                }
                 return adapter.getEntity(entity);
             } else {
                 return null;
