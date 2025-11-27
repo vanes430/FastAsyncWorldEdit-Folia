@@ -8,11 +8,11 @@ plugins {
     alias(libs.plugins.codecov)
     jacoco
     id("buildlogic.common")
-    id("com.gradleup.nmcp.aggregation") version "1.2.1"
+    id("com.gradleup.nmcp.aggregation") version "1.3.0"
     id("xyz.jpenilla.run-paper") version "3.0.2"
 }
 
-var rootVersion by extra("2.14.2")
+var rootVersion by extra("2.14.3")
 var snapshot by extra("SNAPSHOT")
 var revision: String by extra("")
 var buildNumber by extra("")

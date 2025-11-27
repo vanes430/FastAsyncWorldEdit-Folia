@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Validate Gradle Wrapper
         uses: gradle/actions/wrapper-validation@v5
       - name: Setup Java
@@ -67,7 +67,7 @@ jobs:
           target-branch: main
           target-directory: worldedit-bukkit
       - name: Archive Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: FastAsyncWorldEdit-Bukkit-SNAPSHOT
           path: worldedit-bukkit/build/libs/FastAsyncWorldEdit-*.jar
