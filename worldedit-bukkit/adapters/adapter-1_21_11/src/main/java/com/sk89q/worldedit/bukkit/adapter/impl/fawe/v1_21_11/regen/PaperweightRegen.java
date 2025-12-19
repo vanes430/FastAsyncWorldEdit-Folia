@@ -21,6 +21,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.dedicated.DedicatedServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.ProgressListener;
+import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.biome.Biome;
@@ -146,9 +147,6 @@ public class PaperweightRegen extends Regenerator {
 
         BiomeProvider biomeProvider = getBiomeProvider();
 
-        if (FoliaUtil.isFoliaServer()) {
-            return initNewWorldForFolia(server, newWorldData, environment, generator, biomeProvider);
-        }
 
         //init world
         freshWorld = Fawe.instance().getQueueHandler().sync((Supplier<ServerLevel>) () -> new ServerLevel(
@@ -209,82 +207,32 @@ public class PaperweightRegen extends Regenerator {
         if (paperConfigField != null) {
             paperConfigField.set(freshWorld, originalServerWorld.paperConfig());
         }
+
+        if (FoliaUtil.isFoliaServer()) {
+            return initWorldForFolia(newWorldData);
+        }
+
         return true;
     }
 
-    private boolean initNewWorldForFolia(
-            MinecraftServer server,
-            PrimaryLevelData newWorldData,
-            World.Environment environment,
-            org.bukkit.generator.ChunkGenerator generator,
-            BiomeProvider biomeProvider
-    ) throws ExecutionException, InterruptedException {
+    private boolean initWorldForFolia(PrimaryLevelData worldData) throws ExecutionException, InterruptedException {
+        MinecraftServer console = ((CraftServer) Bukkit.getServer()).getServer();
+
+        ChunkPos spawnChunk = new ChunkPos(
+                freshWorld.getChunkSource().randomState().sampler().findSpawnPosition()
+        );
+
+        setRandomSpawnSelection(spawnChunk);
+
         CompletableFuture<Boolean> initFuture = new CompletableFuture<>();
 
-        Bukkit.getServer().getGlobalRegionScheduler().run(
+        Bukkit.getServer().getRegionScheduler().run(
                 WorldEditPlugin.getInstance(),
+                freshWorld.getWorld(),
+                spawnChunk.x, spawnChunk.z,
                 task -> {
                     try {
-                        freshWorld = new ServerLevel(
-                                server,
-                                server.executor,
-                                session,
-                                newWorldData,
-                                originalServerWorld.dimension(),
-                                new LevelStem(
-                                        originalServerWorld.dimensionTypeRegistration(),
-                                        originalServerWorld.getChunkSource().getGenerator()
-                                ),
-                                originalServerWorld.isDebug(),
-                                seed,
-                                ImmutableList.of(),
-                                false,
-                                originalServerWorld.getRandomSequences(),
-                                environment,
-                                generator,
-                                biomeProvider
-                        ) {
-
-                            private final Holder<Biome> singleBiome = options.hasBiomeType() ? DedicatedServer.getServer().registryAccess()
-                                    .lookupOrThrow(BIOME).asHolderIdMap().byIdOrThrow(
-                                            WorldEditPlugin.getInstance().getBukkitImplAdapter().getInternalBiomeId(options.getBiomeType())
-                                    ) : null;
-
-                            @Override
-                            public @Nonnull Holder<Biome> getUncachedNoiseBiome(int biomeX, int biomeY, int biomeZ) {
-                                if (options.hasBiomeType()) {
-                                    return singleBiome;
-                                }
-                                return super.getUncachedNoiseBiome(biomeX, biomeY, biomeZ);
-                            }
-
-                            @Override
-                            public void save(
-                                    final ProgressListener progressListener,
-                                    final boolean flush,
-                                    final boolean savingDisabled
-                            ) {
-                                // noop, spigot
-                            }
-
-                            @Override
-                            public void save(
-                                    final ProgressListener progressListener,
-                                    final boolean flush,
-                                    final boolean savingDisabled,
-                                    final boolean close
-                            ) {
-                                // noop, paper
-                            }
-                        };
-
-                        freshWorld.noSave = true;
-                        removeWorldFromWorldsMap();
-                        newWorldData.checkName(originalServerWorld.serverLevelData.getLevelName());
-                        if (paperConfigField != null) {
-                            paperConfigField.set(freshWorld, originalServerWorld.paperConfig());
-                        }
-
+                        console.initWorld(freshWorld, worldData, worldData.worldGenOptions());
                         initFuture.complete(true);
                     } catch (Exception e) {
                         initFuture.completeExceptionally(e);
@@ -293,6 +241,16 @@ public class PaperweightRegen extends Regenerator {
         );
 
         return initFuture.get();
+    }
+
+    private void setRandomSpawnSelection(ChunkPos spawnChunk) {
+        try {
+            Field randomSpawnField = ServerLevel.class.getDeclaredField("randomSpawnSelection");
+            randomSpawnField.setAccessible(true);
+            randomSpawnField.set(freshWorld, spawnChunk);
+        } catch (ReflectiveOperationException e) {
+            throw new RuntimeException("Failed to set randomSpawnSelection for Folia world initialization", e);
+        }
     }
 
     @Override
@@ -304,53 +262,20 @@ public class PaperweightRegen extends Regenerator {
 
         //shutdown chunk provider
         try {
-            if (FoliaUtil.isFoliaServer()) {
-                CompletableFuture<Void> cleanupFuture = new CompletableFuture<>();
-                Bukkit.getServer().getGlobalRegionScheduler().run(
-                        WorldEditPlugin.getInstance(),
-                        task -> {
-                            try {
-                                freshWorld.getChunkSource().getDataStorage().cache.clear();
-                                freshWorld.getChunkSource().close(false);
-                                cleanupFuture.complete(null);
-                            } catch (Exception e) {
-                                cleanupFuture.completeExceptionally(e);
-                            }
-                        }
-                );
-                cleanupFuture.get();
-            } else {
-                Fawe.instance().getQueueHandler().sync(() -> {
-                    try {
-                        freshWorld.getChunkSource().getDataStorage().cache.clear();
-                        freshWorld.getChunkSource().close(false);
-                    } catch (Exception e) {
-                        throw new RuntimeException(e);
-                    }
-                });
-            }
+            Fawe.instance().getQueueHandler().sync(() -> {
+                try {
+                    freshWorld.getChunkSource().getDataStorage().cache.clear();
+                    freshWorld.getChunkSource().close(false);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
         } catch (Exception ignored) {
         }
 
         //remove world from server
         try {
-            if (FoliaUtil.isFoliaServer()) {
-                CompletableFuture<Void> removeFuture = new CompletableFuture<>();
-                Bukkit.getServer().getGlobalRegionScheduler().run(
-                        WorldEditPlugin.getInstance(),
-                        task -> {
-                            try {
-                                removeWorldFromWorldsMap();
-                                removeFuture.complete(null);
-                            } catch (Exception e) {
-                                removeFuture.completeExceptionally(e);
-                            }
-                        }
-                );
-                removeFuture.get();
-            } else {
-                Fawe.instance().getQueueHandler().sync(this::removeWorldFromWorldsMap);
-            }
+            Fawe.instance().getQueueHandler().sync(this::removeWorldFromWorldsMap);
         } catch (Exception ignored) {
         }
 
