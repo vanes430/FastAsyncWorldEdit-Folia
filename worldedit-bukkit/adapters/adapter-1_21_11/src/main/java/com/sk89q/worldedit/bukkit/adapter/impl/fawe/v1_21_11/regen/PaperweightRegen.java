@@ -5,6 +5,7 @@ import com.fastasyncworldedit.core.Fawe;
 import com.fastasyncworldedit.core.queue.IChunkCache;
 import com.fastasyncworldedit.core.queue.IChunkGet;
 import com.fastasyncworldedit.core.queue.implementation.chunk.ChunkCache;
+import com.fastasyncworldedit.core.util.FoliaUtil;
 import com.google.common.collect.ImmutableList;
 import com.mojang.serialization.Lifecycle;
 import com.sk89q.worldedit.bukkit.BukkitAdapter;
@@ -39,6 +40,8 @@ import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.OptionalLong;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -143,6 +146,9 @@ public class PaperweightRegen extends Regenerator {
 
         BiomeProvider biomeProvider = getBiomeProvider();
 
+        if (FoliaUtil.isFoliaServer()) {
+            return initNewWorldForFolia(server, newWorldData, environment, generator, biomeProvider);
+        }
 
         //init world
         freshWorld = Fawe.instance().getQueueHandler().sync((Supplier<ServerLevel>) () -> new ServerLevel(
@@ -206,6 +212,89 @@ public class PaperweightRegen extends Regenerator {
         return true;
     }
 
+    private boolean initNewWorldForFolia(
+            MinecraftServer server,
+            PrimaryLevelData newWorldData,
+            World.Environment environment,
+            org.bukkit.generator.ChunkGenerator generator,
+            BiomeProvider biomeProvider
+    ) throws ExecutionException, InterruptedException {
+        CompletableFuture<Boolean> initFuture = new CompletableFuture<>();
+
+        Bukkit.getServer().getGlobalRegionScheduler().run(
+                WorldEditPlugin.getInstance(),
+                task -> {
+                    try {
+                        freshWorld = new ServerLevel(
+                                server,
+                                server.executor,
+                                session,
+                                newWorldData,
+                                originalServerWorld.dimension(),
+                                new LevelStem(
+                                        originalServerWorld.dimensionTypeRegistration(),
+                                        originalServerWorld.getChunkSource().getGenerator()
+                                ),
+                                originalServerWorld.isDebug(),
+                                seed,
+                                ImmutableList.of(),
+                                false,
+                                originalServerWorld.getRandomSequences(),
+                                environment,
+                                generator,
+                                biomeProvider
+                        ) {
+
+                            private final Holder<Biome> singleBiome = options.hasBiomeType() ? DedicatedServer.getServer().registryAccess()
+                                    .lookupOrThrow(BIOME).asHolderIdMap().byIdOrThrow(
+                                            WorldEditPlugin.getInstance().getBukkitImplAdapter().getInternalBiomeId(options.getBiomeType())
+                                    ) : null;
+
+                            @Override
+                            public @Nonnull Holder<Biome> getUncachedNoiseBiome(int biomeX, int biomeY, int biomeZ) {
+                                if (options.hasBiomeType()) {
+                                    return singleBiome;
+                                }
+                                return super.getUncachedNoiseBiome(biomeX, biomeY, biomeZ);
+                            }
+
+                            @Override
+                            public void save(
+                                    final ProgressListener progressListener,
+                                    final boolean flush,
+                                    final boolean savingDisabled
+                            ) {
+                                // noop, spigot
+                            }
+
+                            @Override
+                            public void save(
+                                    final ProgressListener progressListener,
+                                    final boolean flush,
+                                    final boolean savingDisabled,
+                                    final boolean close
+                            ) {
+                                // noop, paper
+                            }
+                        };
+
+                        freshWorld.noSave = true;
+                        removeWorldFromWorldsMap();
+                        newWorldData.checkName(originalServerWorld.serverLevelData.getLevelName());
+                        if (paperConfigField != null) {
+                            paperConfigField.set(freshWorld, originalServerWorld.paperConfig());
+                        }
+
+                        initFuture.complete(true);
+                    } catch (Exception e) {
+                        initFuture.completeExceptionally(e);
+                    }
+                }
+        );
+
+        return initFuture.get();
+    }
+
     @Override
     protected void cleanup() {
         try {
@@ -215,20 +304,53 @@ public class PaperweightRegen extends Regenerator {
 
         //shutdown chunk provider
         try {
-            Fawe.instance().getQueueHandler().sync(() -> {
-                try {
-                    freshWorld.getChunkSource().getDataStorage().cache.clear();
-                    freshWorld.getChunkSource().close(false);
-                } catch (Exception e) {
-                    throw new RuntimeException(e);
-                }
-            });
+            if (FoliaUtil.isFoliaServer()) {
+                CompletableFuture<Void> cleanupFuture = new CompletableFuture<>();
+                Bukkit.getServer().getGlobalRegionScheduler().run(
+                        WorldEditPlugin.getInstance(),
+                        task -> {
+                            try {
+                                freshWorld.getChunkSource().getDataStorage().cache.clear();
+                                freshWorld.getChunkSource().close(false);
+                                cleanupFuture.complete(null);
+                            } catch (Exception e) {
+                                cleanupFuture.completeExceptionally(e);
+                            }
+                        }
+                );
+                cleanupFuture.get();
+            } else {
+                Fawe.instance().getQueueHandler().sync(() -> {
+                    try {
+                        freshWorld.getChunkSource().getDataStorage().cache.clear();
+                        freshWorld.getChunkSource().close(false);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+            }
         } catch (Exception ignored) {
         }
 
         //remove world from server
         try {
-            Fawe.instance().getQueueHandler().sync(this::removeWorldFromWorldsMap);
+            if (FoliaUtil.isFoliaServer()) {
+                CompletableFuture<Void> removeFuture = new CompletableFuture<>();
+                Bukkit.getServer().getGlobalRegionScheduler().run(
+                        WorldEditPlugin.getInstance(),
+                        task -> {
+                            try {
+                                removeWorldFromWorldsMap();
+                                removeFuture.complete(null);
+                            } catch (Exception e) {
+                                removeFuture.completeExceptionally(e);
+                            }
+                        }
+                );
+                removeFuture.get();
+            } else {
+                Fawe.instance().getQueueHandler().sync(this::removeWorldFromWorldsMap);
+            }
         } catch (Exception ignored) {
         }
 
@@ -237,6 +359,11 @@ public class PaperweightRegen extends Regenerator {
             SafeFiles.tryHardToDeleteDir(tempDir);
         } catch (Exception ignored) {
         }
+    }
+
+    @Override
+    protected World getFreshWorld() {
+        return freshWorld != null ? freshWorld.getWorld() : null;
     }
 
     @Override
