@@ -79,6 +79,20 @@ val adaptersReobf = configurations.create("adaptersReobf") {
     extendsFrom(adapters)
 }
 
+allprojects {
+    configurations.configureEach {
+        resolutionStrategy {
+            capabilitiesResolution {
+                withCapability("org.lz4:lz4-java") {
+                    select(candidates.first {
+                        (it.id as org.gradle.api.artifacts.component.ModuleComponentIdentifier).group == "at.yawk.lz4"
+                    })
+                }
+            }
+        }
+    }
+}
+
 dependencies {
     api(project(":worldedit-core"))
     api(project(":worldedit-libs:bukkit"))
@@ -244,8 +258,7 @@ tasks.withType<ShadowJar>().configureEach {
 
 tasks.named("assemble").configure {
     dependsOn("shadowJar")
-    // TODO: re-enable when paper releases mappings
-    // dependsOn("reobfShadowJar")
+    dependsOn("reobfShadowJar")
 }
 
 publishMods {
