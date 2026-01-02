@@ -290,7 +290,6 @@ public class PaperweightFaweWorldNativeAccess implements WorldNativeAccess<Level
 
     }
 
-
     private int getCurrentTick() {
         try {
             return MinecraftServer.currentTick;
